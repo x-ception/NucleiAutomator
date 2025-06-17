@@ -5,10 +5,10 @@ import argparse
 from datetime import datetime
 
 # ========== CONFIG ==========
-NUCLEI_TEMPLATES = "/home/exploiter/nuclei-templates/"
-DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1379480233228505199/h6dOJBqlhq25wDi4jw9tFueqMiwx9szPEoYbVooje9rMO47CWsLKltU2Uux2NsOJzoLX"  # Add if needed
+NUCLEI_TEMPLATES = "/path/to/nuclei-templates/"
+DISCORD_WEBHOOK = "YOUR_DISCORD_WEBHOOK"
 DELAY_BETWEEN_PHASES = 30  # Seconds
-NUCLEI_BINARY = "nuclei" # Change if in different path
+NUCLEI_BINARY = "nuclei"
 OUTPUT_BASE = f"output/scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 os.makedirs(OUTPUT_BASE, exist_ok=True)
 
@@ -23,11 +23,11 @@ def notify_discord(message):
     except Exception as e:
         print(f"[!] Discord Error: {e}")
 
-def run_nuclei(input_file, severity, tags, outfile):
-    print(f"\n[+] Running Nuclei for severity: {severity} ({tags})")
+def run_nuclei_severity(input_file, severity, outfile):
+    print(f"\n[+] Running Nuclei - Severity: {severity}")
     cmd = (
         f"{NUCLEI_BINARY} -l {input_file} -t {NUCLEI_TEMPLATES} "
-        f"-s {severity} -tags {tags} -c 25 -rl 100 -retries 1 "
+        f"-s {severity} -c 25 -rl 100 -retries 1 "
         f"-o {outfile} -silent"
     )
     try:
@@ -37,18 +37,40 @@ def run_nuclei(input_file, severity, tags, outfile):
         print(f"[!] Nuclei error in {severity}: {e}")
         notify_discord(f"❌ Nuclei scan failed in phase `{severity}`")
 
+def run_nuclei_tags(input_file, tags, outfile):
+    print(f"\n[+] Running Nuclei - Tags: {tags}")
+    cmd = (
+        f"{NUCLEI_BINARY} -l {input_file} -t {NUCLEI_TEMPLATES} "
+        f"-tags {tags} -c 25 -rl 100 -retries 1 "
+        f"-o {outfile} -silent"
+    )
+    try:
+        subprocess.run(cmd, shell=True, check=True)
+        notify_discord(f"✅ Nuclei tag-based phase `{tags}` completed. Check: `{outfile}`")
+    except subprocess.CalledProcessError as e:
+        print(f"[!] Nuclei tag scan error: {e}")
+        notify_discord(f"❌ Nuclei tag scan failed for `{tags}`")
+
 def generate_html_report():
     html_path = os.path.join(OUTPUT_BASE, "report.html")
     with open(html_path, "w") as html:
         html.write("<html><head><title>Nuclei Report</title></head><body>")
         html.write(f"<h1>Nuclei Scan Report - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</h1>")
-        for sev in ["info", "low", "medium_high_critical"]:
-            file = os.path.join(OUTPUT_BASE, f"{sev}.txt")
-            if os.path.exists(file):
-                html.write(f"<h2>{sev.upper()} Results</h2><pre>")
-                with open(file, "r") as f:
+
+        for label, file in {
+            "INFO": "info.txt",
+            "LOW": "low.txt",
+            "MEDIUM + HIGH": "medium_high.txt",
+            "CRITICAL": "critical.txt",
+            "TAGGED (rce,sqli,xss...)": "tagged.txt"
+        }.items():
+            full_path = os.path.join(OUTPUT_BASE, file)
+            if os.path.exists(full_path):
+                html.write(f"<h2>{label}</h2><pre>")
+                with open(full_path, "r") as f:
                     html.write(f.read())
                 html.write("</pre>")
+
         html.write("</body></html>")
     print(f"[+] HTML report generated: {html_path}")
     notify_discord("📝 Nuclei report is ready (HTML generated)")
@@ -81,12 +103,21 @@ def main():
     print(f"📁 Output will be saved in: {OUTPUT_BASE}")
     notify_discord("🚀 NucleiAutomator scan started!")
 
-    # Phased Nuclei Scanning
-    run_nuclei(input_file, "info", "exposure,disclosure", os.path.join(OUTPUT_BASE, "info.txt"))
+    # Severity-based scans
+    run_nuclei_severity(input_file, "info", os.path.join(OUTPUT_BASE, "info.txt"))
     time.sleep(DELAY_BETWEEN_PHASES)
-    run_nuclei(input_file, "low", "low-hanging", os.path.join(OUTPUT_BASE, "low.txt"))
+
+    run_nuclei_severity(input_file, "low", os.path.join(OUTPUT_BASE, "low.txt"))
     time.sleep(DELAY_BETWEEN_PHASES)
-    run_nuclei(input_file, "medium,high,critical", "rce,sqli,xss,ssrf,lfi,auth", os.path.join(OUTPUT_BASE, "medium_high_critical.txt"))
+
+    run_nuclei_severity(input_file, "medium,high", os.path.join(OUTPUT_BASE, "medium_high.txt"))
+    time.sleep(DELAY_BETWEEN_PHASES)
+
+    run_nuclei_severity(input_file, "critical", os.path.join(OUTPUT_BASE, "critical.txt"))
+    time.sleep(DELAY_BETWEEN_PHASES)
+
+    # Tag-based scan
+    run_nuclei_tags(input_file, "rce,sqli,xss,ssrf,lfi,auth", os.path.join(OUTPUT_BASE, "tagged.txt"))
 
     generate_html_report()
     print("\n🎯 Scan completed.")
